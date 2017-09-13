@@ -8,17 +8,21 @@ set -xe
 
 apk update && apk upgrade
 
+# busybox contains bug in env command preventing gitaly setup, downgrade it
+apk add busybox=1.25.1-r0 --no-cache --repository=http://dl-cdn.alpinelinux.org/alpine/v3.5/main
+
 # install runtime deps
-apk add openssh git nginx postgresql redis nodejs icu-libs
-apk add postgresql-contrib # required for extensions
-apk add ruby ruby-irb ruby-io-console
-apk add sudo # considered bad practice but we really need it
-apk add procps # to replace busybox pkill
+apk add --no-cache openssh git nginx postgresql redis nodejs-current icu-libs libre2
+apk add --no-cache postgresql-contrib # required for extensions
+apk add --no-cache ruby ruby-irb ruby-io-console
+apk add --no-cache sudo # considered bad practice but we really need it
+apk add --no-cache procps # to replace busybox pkill
 
 # install build deps
-apk add gcc g++ make cmake linux-headers go python2
-apk add icu-dev ruby-dev musl-dev postgresql-dev zlib-dev libffi-dev
-apk add yarn --update-cache --repository http://dl-cdn.alpinelinux.org/alpine/edge/community
+apk add --no-cache --virtual .build-deps \
+gcc g++ make cmake linux-headers \
+icu-dev ruby-dev musl-dev postgresql-dev zlib-dev libffi-dev libre2-dev \
+python2 go yarn
 
 ssh-keygen -A # generate server keys
 
@@ -56,7 +60,7 @@ WHERE name = 'pg_trgm'
 AND installed_version IS NOT NULL;
 CMD
 
-# setup redis
+# configure redis
 CONFIG=$DIR/config/redis.conf
 SOCKET=/var/run/redis/redis.sock
 cp /etc/redis.conf $CONFIG
@@ -126,16 +130,13 @@ find $DIR/repo -type d -print0 | sudo xargs -0 chmod g+s
 sudo -u $USER -H mkdir public/uploads
 chmod 0700 public/uploads
 
-gem install bundler --version '1.14.6' --no-ri --no-rdoc # v1.15.0 bug prevents installation
-gem install json --no-ri --no-rdoc # for gitlab-shell
+# install bundler
+gem install bundler --no-ri --no-rdoc
 
-# inject lacking gems
+# add lacking gems for gitlab-shell
+gem install json --no-ri --no-rdoc
 sudo -u $USER -H bundle inject 'bigdecimal' '> 0'
 sudo -u $USER -H bundle inject 'tzinfo-data' '> 0'
-
-# gitaly gem depends on grpc gem that seems to be incompatible with musl libc, remove it
-sed --in-place "s/^gem 'gitaly'.*/#&/" Gemfile
-sed --in-place "s/^require 'gitaly'/#&/" lib/gitlab/gitaly_client.rb
 
 # to parallelize bundler jobs
 CPU_COUNT=`awk '/^processor/{n+=1}END{print n}' /proc/cpuinfo`
@@ -143,11 +144,28 @@ CPU_COUNT=`awk '/^processor/{n+=1}END{print n}' /proc/cpuinfo`
 # use no deployment option first cause we changed gemfile
 sudo -u $USER -H bundle install --jobs=$CPU_COUNT --no-deployment --path vendor/bundle --without development test mysql aws kerberos
 
-# continue as per gitlab instructions
+# install gems
 sudo -u $USER -H bundle install --jobs=$CPU_COUNT --deployment --without development test mysql aws kerberos
+
+# install gitlab shell
 sudo -u $USER -H bundle exec rake gitlab:shell:install REDIS_URL=unix:$SOCKET RAILS_ENV=production SKIP_STORAGE_VALIDATION=true
+
+# install gitlab-workhorse
 sudo -u $USER -H bundle exec rake "gitlab:workhorse:install[/home/$USER/gitlab-workhorse]" RAILS_ENV=production
+
+# initialize database
 echo yes | sudo -u $USER -H bundle exec rake gitlab:setup RAILS_ENV=production
+
+# install gitaly
+sudo -u git -H bundle exec rake "gitlab:gitaly:install[/home/git/gitaly]" RAILS_ENV=production
+chmod 0700 /home/git/gitlab/tmp/sockets/private
+chown $USER /home/git/gitlab/tmp/sockets/private
+
+# compile GetText PO files
+sudo -u $USER -H bundle exec rake gettext:pack RAILS_ENV=production
+sudo -u $USER -H bundle exec rake gettext:po_to_json RAILS_ENV=production
+
+# compile assets
 sudo -u $USER -H yarn install --production --pure-lockfile
 sudo -u $USER -H bundle exec rake gitlab:assets:compile RAILS_ENV=production NODE_ENV=production
 
@@ -161,20 +179,20 @@ cp lib/support/init.d/gitlab /etc/init.d/gitlab
 cp lib/support/logrotate/gitlab /etc/logrotate.d/gitlab
 cp lib/support/nginx/gitlab /etc/nginx/conf.d/gitlab.conf
 
-# install defaults for use by entrypoint script
+# create defaults file
 DEFAULTS=/etc/default/gitlab
-mkdir /etc/default
-touch $DEFAULTS
+mkdir /etc/default && touch $DEFAULTS
+# for entrypoint script
 echo "DOMAIN=$DOMAIN" >>$DEFAULTS
 echo "USER=$USER" >>$DEFAULTS
 echo "DIR=$DIR" >>$DEFAULTS
 echo "SOCKET=$SOCKET" >>$DEFAULTS
-echo "app_user=$USER" >>$DEFAULTS # for gitlab init script
+# for gitlab init script
+echo "app_user=$USER" >>$DEFAULTS
+echo "shell_path=/bin/sh" >>$DEFAULTS
 
 # cleanup build deps
-apk del go python2 yarn
-apk del gcc g++ make cmake linux-headers
-apk del icu-dev ruby-dev musl-dev postgresql-dev zlib-dev libffi-dev
+apk del .build-deps
 
 # these dirs waste a lot of space and not needed in runtime, remove them
 rm -rf node_modules .git
