@@ -22,7 +22,10 @@ apk add --no-cache procps # to replace busybox pkill
 apk add --no-cache --virtual .build-deps \
 gcc g++ make cmake linux-headers \
 icu-dev ruby-dev musl-dev postgresql-dev zlib-dev libffi-dev libre2-dev \
-python2 go yarn
+python2 go
+
+# yarn has bug preventing installation, upgrade to version 1.0.2-r0
+apk add yarn=1.0.2-r0 --no-cache --repository=http://dl-cdn.alpinelinux.org/alpine/edge/community
 
 ssh-keygen -A # generate server keys
 
@@ -193,6 +196,7 @@ echo "shell_path=/bin/sh" >>$DEFAULTS
 
 # cleanup build deps
 apk del .build-deps
+apk del yarn
 
 # these dirs waste a lot of space and not needed in runtime, remove them
 rm -rf node_modules .git

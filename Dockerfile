@@ -1,6 +1,6 @@
 FROM alpine:3.6
 
-ARG VERSION=9.5.5
+ARG VERSION=10.0.0
 ARG DOMAIN=example.com
 
 COPY build.sh /docker/
