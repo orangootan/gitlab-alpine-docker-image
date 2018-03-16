@@ -6,15 +6,15 @@ DIR=/var/opt/gitlab
 # show execution, stop on error
 set -xe
 
-apk update && apk upgrade
+apk upgrade --no-cache
 
-# busybox contains bug in env command preventing gitaly setup, downgrade it
-apk add busybox=1.25.1-r0 --no-cache --repository=http://dl-cdn.alpinelinux.org/alpine/v3.5/main
+# busybox contains bug in env command preventing gitaly setup, upgrade it
+apk add busybox=1.28.1-r0 --no-cache --repository=https://nl.alpinelinux.org/alpine/edge/main
 
 # install runtime deps
-apk add --no-cache openssh git nginx postgresql redis nodejs-current icu-libs libre2
+apk add --no-cache openssh-server git nginx postgresql redis nodejs-current icu-libs libre2
 apk add --no-cache postgresql-contrib # required for extensions
-apk add --no-cache ruby ruby-irb ruby-io-console
+apk add --no-cache ruby ruby-irb ruby-io-console ruby-bigdecimal ruby-json
 apk add --no-cache sudo # considered bad practice but we really need it
 apk add --no-cache procps # to replace busybox pkill
 
@@ -22,12 +22,10 @@ apk add --no-cache procps # to replace busybox pkill
 apk add --no-cache --virtual .build-deps \
 gcc g++ make cmake linux-headers \
 icu-dev ruby-dev musl-dev postgresql-dev zlib-dev libffi-dev libre2-dev \
-python2 go
+python2 go yarn
 
-# yarn has bug preventing installation, upgrade to version 1.0.2-r0
-apk add yarn=1.0.2-r0 --no-cache --repository=http://dl-cdn.alpinelinux.org/alpine/edge/community
-
-ssh-keygen -A # generate server keys
+# generate server keys (replace them in production!)
+ssh-keygen -A
 
 # create gitlab user
 adduser -D -g 'GitLab' $USER
@@ -35,8 +33,9 @@ adduser -D -g 'GitLab' $USER
 mkdir $DIR && cd $DIR && mkdir data repo config
 chown -R $USER:$USER $DIR
 # openssh daemon does not allow locked user to login, change ! to *
-sed -i "s/$USER:!/$USER:*/" /etc/shadow
-echo "$USER ALL=(ALL) NOPASSWD: ALL" >>/etc/sudoers # sudo no tty fix
+sed --in-place "s/$USER:!/$USER:*/" /etc/shadow
+# sudo no tty fix
+echo "$USER ALL=(ALL) NOPASSWD: ALL" >>/etc/sudoers
 
 # configure nginx
 mkdir /run/nginx
@@ -81,16 +80,16 @@ sudo -u redis redis-server $CONFIG # start redis
 sudo -u $USER -H git config --global gc.auto 0
 sudo -u $USER -H git config --global core.autocrlf input
 sudo -u $USER -H git config --global repack.writeBitmaps true
+sudo -u $USER -H git config --global receive.advertisePushOptions true
 
 # pull gitlab
 cd /home/$USER
-sudo -u $USER -H git clone https://gitlab.com/gitlab-org/gitlab-ce.git gitlab
-cd /home/$USER/gitlab
-sudo -u $USER -H git checkout -b docker-build-temporary v$VERSION
+sudo -u $USER -H git clone --depth 1 --branch v$VERSION https://gitlab.com/gitlab-org/gitlab-ce.git gitlab
 
 # configure gitlab
 CONFIG=$DIR/config/gitlab
 sudo -u $USER -H mkdir $CONFIG
+cd /home/$USER/gitlab
 sudo -u $USER -H cp config/gitlab.yml.example $CONFIG/gitlab.yml
 sudo -u $USER -H cp config/unicorn.rb.example $CONFIG/unicorn.rb
 sudo -u $USER -H cp config/resque.yml.example $CONFIG/resque.yml
@@ -136,16 +135,8 @@ chmod 0700 public/uploads
 # install bundler
 gem install bundler --no-ri --no-rdoc
 
-# add lacking gems for gitlab-shell
-gem install json --no-ri --no-rdoc
-sudo -u $USER -H bundle inject 'bigdecimal' '> 0'
-sudo -u $USER -H bundle inject 'tzinfo-data' '> 0'
-
 # to parallelize bundler jobs
 CPU_COUNT=`awk '/^processor/{n+=1}END{print n}' /proc/cpuinfo`
-
-# use no deployment option first cause we changed gemfile
-sudo -u $USER -H bundle install --jobs=$CPU_COUNT --no-deployment --path vendor/bundle --without development test mysql aws kerberos
 
 # install gems
 sudo -u $USER -H bundle install --jobs=$CPU_COUNT --deployment --without development test mysql aws kerberos
@@ -160,22 +151,20 @@ sudo -u $USER -H bundle exec rake "gitlab:workhorse:install[/home/$USER/gitlab-w
 echo yes | sudo -u $USER -H bundle exec rake gitlab:setup RAILS_ENV=production
 
 # install gitaly
-sudo -u git -H bundle exec rake "gitlab:gitaly:install[/home/git/gitaly]" RAILS_ENV=production
-chmod 0700 /home/git/gitlab/tmp/sockets/private
-chown $USER /home/git/gitlab/tmp/sockets/private
+sudo -u $USER -H bundle exec rake "gitlab:gitaly:install[/home/$USER/gitaly]" RAILS_ENV=production
+chmod 0700 /home/$USER/gitlab/tmp/sockets/private
+chown $USER /home/$USER/gitlab/tmp/sockets/private
 
 # compile GetText PO files
-sudo -u $USER -H bundle exec rake gettext:pack RAILS_ENV=production
-sudo -u $USER -H bundle exec rake gettext:po_to_json RAILS_ENV=production
+sudo -u $USER -H bundle exec rake gettext:compile RAILS_ENV=production
 
 # compile assets
 sudo -u $USER -H yarn install --production --pure-lockfile
 sudo -u $USER -H bundle exec rake gitlab:assets:compile RAILS_ENV=production NODE_ENV=production
 
-# busybox pkill not compatible with -- syntax
+# busybox pkill has no support of -u option, replace with procps pkill
 rm /usr/bin/pkill
 ln -s /bin/pkill /usr/bin/pkill
-sed --in-place 's/kill --/kill/' lib/support/init.d/gitlab
 
 # install support scripts
 cp lib/support/init.d/gitlab /etc/init.d/gitlab
@@ -196,7 +185,6 @@ echo "shell_path=/bin/sh" >>$DEFAULTS
 
 # cleanup build deps
 apk del .build-deps
-apk del yarn
 
 # these dirs waste a lot of space and not needed in runtime, remove them
 rm -rf node_modules .git

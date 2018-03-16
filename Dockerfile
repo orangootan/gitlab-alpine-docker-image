@@ -1,11 +1,10 @@
-FROM alpine:3.6
+FROM alpine:3.7
 
-ARG VERSION=10.0.0
+ARG VERSION=10.5.4
 ARG DOMAIN=example.com
 
-COPY build.sh /docker/
+COPY build.sh entrypoint.sh /docker/
 RUN /docker/build.sh
-COPY entrypoint.sh /docker/
 
-VOLUME /var/opt/gitlab /var/log
+#VOLUME /var/opt/gitlab /var/log /etc/ssh
 ENTRYPOINT ["/docker/entrypoint.sh"]
