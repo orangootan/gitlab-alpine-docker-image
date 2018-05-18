@@ -9,7 +9,7 @@ set -xe
 apk upgrade --no-cache
 
 # busybox contains bug in env command preventing gitaly setup, upgrade it
-apk add busybox=1.28.2-r3 --no-cache --repository=https://nl.alpinelinux.org/alpine/edge/main
+apk add busybox=1.28.3-r0 --no-cache --repository=https://nl.alpinelinux.org/alpine/edge/main
 
 # install runtime deps
 apk add --no-cache openssh-server git nginx postgresql redis nodejs-current icu-libs libre2
