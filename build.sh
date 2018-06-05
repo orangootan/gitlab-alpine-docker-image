@@ -9,7 +9,7 @@ set -xe
 apk upgrade --no-cache
 
 # busybox contains bug in env command preventing gitaly setup, upgrade it
-apk add busybox=1.28.3-r0 --no-cache --repository=https://nl.alpinelinux.org/alpine/edge/main
+apk add busybox=1.28.4-r0 --no-cache --repository=https://nl.alpinelinux.org/alpine/edge/main
 
 # install runtime deps
 apk add --no-cache openssh-server git nginx postgresql redis nodejs-current icu-libs libre2
@@ -147,13 +147,16 @@ sudo -u $USER -H bundle exec rake gitlab:shell:install REDIS_URL=unix:$SOCKET RA
 # install gitlab-workhorse
 sudo -u $USER -H bundle exec rake "gitlab:workhorse:install[/home/$USER/gitlab-workhorse]" RAILS_ENV=production
 
-# initialize database
-echo yes | sudo -u $USER -H bundle exec rake gitlab:setup RAILS_ENV=production
-
 # install gitaly
 sudo -u $USER -H bundle exec rake "gitlab:gitaly:install[/home/$USER/gitaly]" RAILS_ENV=production
 chmod 0700 /home/$USER/gitlab/tmp/sockets/private
 chown $USER /home/$USER/gitlab/tmp/sockets/private
+# run gitaly
+sudo -u $USER /home/$USER/gitaly/gitaly /home/$USER/gitaly/config.toml &>/dev/null &
+sleep 5
+
+# initialize database
+echo yes | sudo -u $USER -H bundle exec rake gitlab:setup RAILS_ENV=production
 
 # compile GetText PO files
 sudo -u $USER -H bundle exec rake gettext:compile RAILS_ENV=production
@@ -194,6 +197,7 @@ rm -rf /home/$USER/.cache/yarn
 sed --in-place "/$USER.*/d" /etc/sudoers
 
 # stop services
+sudo -u $USER pkill gitaly
 sudo -u postgres pg_ctl stop --mode smart --pgdata $DIR/data
 sudo -u redis redis-cli -s $SOCKET shutdown
 sleep 5 # wait services stopping
