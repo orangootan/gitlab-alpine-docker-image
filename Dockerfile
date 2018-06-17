@@ -1,6 +1,6 @@
 FROM alpine:3.7
 
-ARG VERSION=10.8.3
+ARG VERSION=10.8.4
 ARG DOMAIN=example.com
 
 COPY build.sh entrypoint.sh /docker/
